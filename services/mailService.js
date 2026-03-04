@@ -26,7 +26,7 @@ export async function sendWelcomeEmail(user) {
   //     <b>Job Processing System Demo</b>
   //   `,
   // });
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  // await new Promise((resolve) => setTimeout(resolve, 2000));
 
   console.log(`Email sent successfully to ${user.email}`);
 
