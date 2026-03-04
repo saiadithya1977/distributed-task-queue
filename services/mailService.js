@@ -3,7 +3,7 @@ import nodemailer from "nodemailer";
 
 const transporter = nodemailer.createTransport({
   host: process.env.MAIL_HOST,
-  port: process.env.MAIL_PORT,
+  port: Number(process.env.MAIL_PORT),
   secure:false,
   auth: {
     user: process.env.MAIL_USER,
@@ -13,6 +13,7 @@ const transporter = nodemailer.createTransport({
 
 
 export async function sendWelcomeEmail(user) {
+  console.log("Preparing email for:", user.email);
   const info = await transporter.sendMail({
     from: process.env.MAIL_FROM,
     to: user.email,
