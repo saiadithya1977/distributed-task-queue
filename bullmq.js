@@ -141,4 +141,28 @@ async function getAllJobs() {
   }
 }
 
-export { addJob, getJobStatus, getAllJobs };
+async function getQueueMetrics() {
+  const counts = await myQueue.getJobCounts(
+    "waiting",
+    "active",
+    "completed",
+    "failed",
+    "delayed"
+  );
+
+  return {
+    waiting: counts.waiting,
+    active: counts.active,
+    completed: counts.completed,
+    failed: counts.failed,
+    delayed: counts.delayed,
+    total:
+      counts.waiting +
+      counts.active +
+      counts.completed +
+      counts.failed +
+      counts.delayed,
+  };
+}
+
+export { addJob, getJobStatus, getAllJobs, getQueueMetrics };

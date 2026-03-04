@@ -1,6 +1,6 @@
 import express from 'express';
 const port=3000;
-import {addJob,getJobStatus,getAllJobs} from './bullmq.js';
+import {addJob,getJobStatus,getAllJobs,getQueueMetrics} from './bullmq.js';
 import connectDB from './db.js';
 import User from './Model.js';
 import FailedJob from './Failedjobs.js';
@@ -73,3 +73,8 @@ app.route("/jobs").get(async(req,res)=>{
     const jobs = await getAllJobs();
     res.json(jobs);
 })
+
+app.route("/metrics").get(async(req,res)=>{
+    const metrics = await getQueueMetrics();
+    res.json(metrics);
+});
