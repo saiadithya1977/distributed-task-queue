@@ -1,29 +1,101 @@
-import { Worker } from "bullmq";
-import IOredis from "ioredis";
+import pkg from "bullmq";
+const { Worker } = pkg;
 
-const connection = new IOredis({maxRetriesPerRequest: null});
+import User from "./Model.js";
+import connectDB from "./db.js";
+import FailedJob from "./Failedjobs.js";
+import "dotenv/config";
+import { sendWelcomeEmail } from "./services/mailService.js";
+import { connection } from "./connection.js";
 
-const worker = new Worker("my-queue", async job => {
-    //intentinally fail one time then pass the job to test retry mechanism this is not working as expected because the job is not being retried after the first failure, it is being marked as failed and not retried. This is because the worker is not throwing an error when the job fails, it is just logging the error and not throwing it. To fix this, we need to throw an error when the job fails so that the worker can retry the job according to the specified retry strategy.
+async function startWorker() {
+  try {
+    await connectDB();
+    console.log("MongoDB connected (Worker)");
 
-    if(job.attemptsMade === 0){
-        console.log(`Job ${job.id} is failing intentionally on the first attempt`);
-        throw new Error("Intentional failure to test retry mechanism");
-    }
-    //print rety count and job data to console
-    console.log(`Job ${job.id} has been retried ${job.attemptsMade} times`);
-    console.log(`Processing job ${job.id} with data:`, job.data);
-    // Simulate some work
-    // await new Promise(resolve => setTimeout(resolve, 2000));
-    // console.log(`Job ${job.id} completed`);
-}, { connection });
+    const worker = new Worker(
+      "my-queue",
+      async (job) => {
+        console.log(`\nProcessing job ${job.id} (attempt ${job.attemptsMade + 1})`);
 
-worker.on('completed', (job) => {
-    console.log(`Job ${job.id} has been completed`);
-});
+        const { userId } = job.data;
 
-worker.on('failed', (job, err) => {
-    console.error(`Job ${job.id} has failed with error:`, err);
-});
+        const user = await User.findById(userId);
 
-console.log("Worker is running and waiting for jobs...");
+        if (!user) {
+          console.log("User not found. Skipping job.");
+          return;
+        }
+
+        if (user.emailSent) {
+          console.log(`Job ${job.id}: Email already sent to ${user.email}. Skipping.`);
+          return;
+        }
+
+        await sendWelcomeEmail(user);
+
+        user.emailSent = true;
+        await user.save();
+
+        console.log(`Email successfully recorded for ${user.email}`);
+      },
+      {
+        connection,
+
+        concurrency: Number(process.env.WORKER_CONCURRENCY) || 2,
+
+        limiter: {
+          max: Number(process.env.WORKER_RATE_LIMIT_MAX) || 5,
+          duration: Number(process.env.WORKER_RATE_LIMIT_DURATION) || 5000
+        }
+      }
+    );
+
+    worker.on("ready", () => {
+      console.log("Worker connected to Redis");
+    });
+
+    worker.on("active", (job) => {
+      console.log(`Job ${job.id} started processing`);
+    });
+
+    worker.on("completed", (job) => {
+      console.log(`Job ${job.id} completed`);
+    });
+
+    worker.on("failed", async (job, err) => {
+      console.log(`Job ${job?.id} failed: ${err.message}`);
+
+      if (job && job.attemptsMade >= job.opts.attempts) {
+        console.log(`Job ${job.id} permanently failed. Saving to Dead Letter DB.`);
+
+        await FailedJob.create({
+          jobId: job.id,
+          userId: job.data.userId,
+          reason: err.message,
+          attempts: job.attemptsMade
+        });
+      }
+    });
+
+    worker.on("error", (err) => {
+      console.error("Worker error:", err);
+    });
+
+    console.log("Worker is running and waiting for jobs...");
+
+    const shutdown = async () => {
+      console.log("Shutting down worker...");
+      await worker.close();
+      process.exit(0);
+    };
+
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
+  } catch (err) {
+    console.error("Worker startup failed:", err);
+  }
+}
+
+startWorker();
