@@ -1,6 +1,8 @@
 import { Queue } from "bullmq";
 import { connection } from "./connection.js";
 import User from "./Model.js";
+import { deadLetterCount } from "./dlq.js";
+import { timingStats } from "./metrics.js";
 
 const myQueue = new Queue("my-queue", {
   connection,
@@ -150,18 +152,27 @@ async function getQueueMetrics() {
     "delayed"
   );
 
+  // Sample the most recent completed jobs for wait/processing time and throughput.
+  const [recentCompleted, deadLetter] = await Promise.all([
+    myQueue.getJobs(["completed"], 0, 499),
+    deadLetterCount(),
+  ]);
+
   return {
     waiting: counts.waiting,
     active: counts.active,
     completed: counts.completed,
     failed: counts.failed,
     delayed: counts.delayed,
+    deadLetter,
     total:
       counts.waiting +
       counts.active +
       counts.completed +
       counts.failed +
       counts.delayed,
+    ...timingStats(recentCompleted),
+    timestamp: Date.now(),
   };
 }
 

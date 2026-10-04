@@ -7,6 +7,7 @@ import FailedJob from "./Failedjobs.js";
 import "dotenv/config";
 import { sendWelcomeEmail } from "./services/mailService.js";
 import { connection } from "./connection.js";
+import { isFinalFailure, moveToDeadLetter } from "./dlq.js";
 
 async function startWorker() {
   try {
@@ -66,15 +67,24 @@ async function startWorker() {
     worker.on("failed", async (job, err) => {
       console.log(`Job ${job?.id} failed: ${err.message}`);
 
-      if (job && job.attemptsMade >= job.opts.attempts) {
-        console.log(`Job ${job.id} permanently failed. Saving to Dead Letter DB.`);
+      if (isFinalFailure(job)) {
+        console.log(`Job ${job.id} permanently failed. Moving to dead-letter queue.`);
 
-        await FailedJob.create({
-          jobId: job.id,
-          userId: job.data.userId,
-          reason: err.message,
-          attempts: job.attemptsMade
-        });
+        // The dead-letter queue is the source of truth for replays...
+        await moveToDeadLetter(job, err);
+
+        // ...and MongoDB keeps a durable audit record. A Mongo outage must not
+        // stop the job from reaching the dead-letter queue, so log and continue.
+        try {
+          await FailedJob.create({
+            jobId: job.id,
+            userId: job.data.userId,
+            reason: err.message,
+            attempts: job.attemptsMade
+          });
+        } catch (dbErr) {
+          console.error(`Could not save failed-job record for ${job.id}:`, dbErr.message);
+        }
       }
     });
 

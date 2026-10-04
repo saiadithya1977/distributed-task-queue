@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "worker": "node worker.js",
+    "test": "node --test test/*.test.js",
+    "bench": "node bench.js 10000 50"
   },
   "type": "module",
   "keywords": [],
@@ -22,5 +24,5 @@
   "devDependencies": {
     "nodemon": "^3.1.14"
   },
-  "description": ""
+  "description": "Fault-tolerant background job processing with BullMQ, Redis and a dead-letter queue"
 }

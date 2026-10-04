@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Queue Monitor</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --surface: #fff; --border: #e2e5ea; --text: #1c2430; --muted: #6b7380;
+      --accent: #1f6feb; --ok: #1b7f3b; --warn: #b35900; --bad: #c62828;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0f1216; --surface: #171b21; --border: #2a313b; --text: #e6e9ee; --muted: #98a1ae;
+              --accent: #58a6ff; --ok: #3fb950; --warn: #f0a050; --bad: #ff6b6b; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+    main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+    header { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+    h1 { margin: 0 0 1rem; font-size: 1.4rem; }
+    h2 { font-size: 1rem; margin: 1.75rem 0 0.75rem; }
+    .muted { color: var(--muted); font-size: 0.85rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem 1rem; }
+    .card .value { font-size: 1.7rem; font-weight: 600; margin-top: 0.25rem; }
+    .card[data-tone="bad"] .value { color: var(--bad); }
+    .card[data-tone="warn"] .value { color: var(--warn); }
+    .card[data-tone="ok"] .value { color: var(--ok); }
+    table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    th, td { text-align: left; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .badge { padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.78rem; border: 1px solid var(--border); }
+    .badge[data-s="completed"] { color: var(--ok); } .badge[data-s="failed"] { color: var(--bad); }
+    .badge[data-s="retrying"] { color: var(--warn); } .badge[data-s="processing"] { color: var(--accent); }
+    button { font: inherit; padding: 0.3rem 0.7rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: inherit; cursor: pointer; }
+    .status-dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--ok); margin-right: 0.35rem; }
+    .status-dot.down { background: var(--bad); }
+    .empty { color: var(--muted); text-align: center; padding: 1rem; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Queue Monitor</h1>
+    <span class="muted"><span id="dot" class="status-dot"></span><span id="updated">Connecting…</span></span>
+  </header>
+
+  <section class="grid" id="counts"></section>
+
+  <h2>Performance <span class="muted">(last <span id="sample">0</span> completed jobs)</span></h2>
+  <section class="grid" id="timings"></section>
+
+  <h2>Dead-letter queue</h2>
+  <table>
+    <thead><tr><th>Job</th><th>Reason</th><th>Attempts</th><th>Failed at</th><th></th></tr></thead>
+    <tbody id="dlq"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+  </table>
+
+  <h2>Recent jobs</h2>
+  <table>
+    <thead><tr><th>Job</th><th>Email</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
+    <tbody id="jobs"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+  </table>
+</main>
+
+<script>
+  const REFRESH_MS = 2000;
+  const $ = (id) => document.getElementById(id);
+
+  // Escape anything that came from job data before putting it in the page.
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const ms = (v) => (v >= 1000 ? (v / 1000).toFixed(1) + " s" : v + " ms");
+
+  function card(label, value, tone) {
+    return `<div class="card" ${tone ? `data-tone="${tone}"` : ""}><div class="muted">${label}</div><div class="value">${value}</div></div>`;
+  }
+
+  function renderMetrics(m) {
+    $("counts").innerHTML = [
+      card("Waiting", m.waiting, m.waiting > 50 ? "warn" : ""),
+      card("Active", m.active),
+      card("Retrying", m.delayed, m.delayed ? "warn" : ""),
+      card("Completed", m.completed, "ok"),
+      card("Failed", m.failed, m.failed ? "bad" : ""),
+      card("Dead letter", m.deadLetter, m.deadLetter ? "bad" : ""),
+    ].join("");
+    $("sample").textContent = m.sampleSize;
+    $("timings").innerHTML = [
+      card("Avg wait in queue", ms(m.avgWaitMs)),
+      card("Avg processing time", ms(m.avgProcessingMs)),
+      card("Completed / last min", m.completedLastMinute),
+    ].join("");
+  }
+
+  function renderDlq(items) {
+    $("dlq").innerHTML = items.length
+      ? items.map((d) => `<tr>
+          <td>#${esc(d.originalJobId)}</td><td>${esc(d.reason)}</td><td>${esc(d.attempts)}</td>
+          <td>${esc(new Date(d.failedAt).toLocaleString())}</td>
+          <td><button data-replay="${esc(d.id)}">Replay</button></td></tr>`).join("")
+      : `<tr><td colspan="5" class="empty">No dead-lettered jobs</td></tr>`;
+  }
+
+  function renderJobs(jobs) {
+    $("jobs").innerHTML = jobs.length
+      ? jobs.map((j) => `<tr>
+          <td>#${esc(j.jobId)}</td><td>${esc(j.email)}</td>
+          <td><span class="badge" data-s="${esc(j.status)}">${esc(j.status)}</span></td>
+          <td>${esc(j.attemptsMade)}</td><td class="muted">${esc(j.failedReason ?? "")}</td></tr>`).join("")
+      : `<tr><td colspan="5" class="empty">No jobs yet</td></tr>`;
+  }
+
+  async function refresh() {
+    try {
+      const [metrics, dlq, jobs] = await Promise.all(
+        ["/metrics", "/dlq", "/jobs"].map((u) => fetch(u).then((r) => { if (!r.ok) throw new Error(u); return r.json(); }))
+      );
+      renderMetrics(metrics);
+      renderDlq(dlq);
+      renderJobs(jobs);
+      $("dot").classList.remove("down");
+      $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+    } catch {
+      $("dot").classList.add("down");
+      $("updated").textContent = "API unreachable, retrying…";
+    }
+  }
+
+  $("dlq").addEventListener("click", async (e) => {
+    const id = e.target.dataset.replay;
+    if (!id) return;
+    e.target.disabled = true;
+    await fetch(`/dlq/${encodeURIComponent(id)}/replay`, { method: "POST" });
+    refresh();
+  });
+
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>
